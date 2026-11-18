@@ -1,0 +1,219 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection validation probe (read-only)
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // --- Global Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidSurveyId(id) {
+      return id in ['survey_1', 'case_1', 'case_2', 'case_3'];
+    }
+
+    function isValidSha256(val) {
+      return val is string && val.size() == 64 && val.matches('^[a-f0-9]{64}$');
+    }
+
+    function hasValidAdminSession(sessionId) {
+      return isValidId(sessionId) && exists(/databases/$(database)/documents/admin_sessions/$(sessionId));
+    }
+
+    // --- Validation Blueprints ---
+    function isValidSurveyConfig(data, surveyId) {
+      return data.keys().hasAll(['surveyId', 'isOpen', 'showLiveResults', 'showCorrectAnswer', 'activeRound', 'updatedAt'])
+        && data.keys().hasOnly(['surveyId', 'isOpen', 'showLiveResults', 'showCorrectAnswer', 'activeRound', 'updatedAt', 'adminSessionId'])
+        && data.surveyId == surveyId
+        && isValidSurveyId(data.surveyId)
+        && data.isOpen is bool
+        && data.showLiveResults is bool
+        && data.showCorrectAnswer is bool
+        && data.activeRound is int
+        && data.activeRound >= 1
+        && data.activeRound <= 10000
+        && data.updatedAt == request.time
+        && (!('adminSessionId' in data) || isValidId(data.adminSessionId));
+    }
+
+    function isValidSurveyResponse(data, surveyId) {
+      return data.keys().hasAll(['surveyId', 'round', 'sessionId', 'selectedOptions', 'sequence', 'language', 'submittedAt'])
+        && data.keys().hasOnly(['surveyId', 'round', 'sessionId', 'selectedOptions', 'sequence', 'language', 'submittedAt'])
+        && data.surveyId == surveyId
+        && isValidSurveyId(data.surveyId)
+        && data.round is int
+        && data.round >= 1
+        && data.round <= 10000
+        && isValidId(data.sessionId)
+        && data.sessionId.size() >= 4
+        && data.sessionId.size() <= 64
+        && data.language in ['kk', 'ru']
+        && data.submittedAt == request.time
+        && data.selectedOptions is list
+        && data.selectedOptions.size() == 1
+        && data.selectedOptions[0] is string
+        && data.sequence is list
+        && data.sequence.size() == 0
+        && (
+          (surveyId == 'survey_1'
+            && data.selectedOptions.hasOnly(['ai_training', 'digital_bank', 'simulators', 'quality_monitoring', 'it_infra']))
+          || (surveyId in ['case_1', 'case_2']
+            && data.selectedOptions.hasOnly(['A', 'B', 'C', 'D']))
+          || (surveyId == 'case_3'
+            && data.selectedOptions.hasOnly(['step_1', 'step_2', 'step_3', 'step_4']))
+        );
+    }
+
+    function isValidCouncilSettings(data) {
+      return data.keys().hasAll(['videoUrl', 'videoType', 'videoTitle', 'preventDuplicateVotes', 'updatedAt'])
+        && data.keys().hasOnly(['videoUrl', 'videoType', 'videoTitle', 'preventDuplicateVotes', 'updatedAt', 'adminSessionId'])
+        && data.videoUrl is string
+        && data.videoUrl.size() <= 1000
+        && data.videoType in ['none', 'youtube', 'vimeo', 'direct']
+        && data.videoTitle is string
+        && data.videoTitle.size() <= 200
+        && data.preventDuplicateVotes is bool
+        && data.updatedAt == request.time
+        && (!('adminSessionId' in data) || isValidId(data.adminSessionId));
+    }
+
+    function isValidAdminConfig(data) {
+      return data.keys().hasAll(['passwordHash', 'updatedAt'])
+        && data.keys().hasOnly(['passwordHash', 'updatedAt', 'adminSessionId'])
+        && isValidSha256(data.passwordHash)
+        && data.updatedAt == request.time
+        && (!('adminSessionId' in data) || isValidId(data.adminSessionId));
+    }
+
+    function isValidAdminSession(data, sessionId) {
+      return data.keys().hasAll(['sessionId', 'passwordHash', 'createdAt'])
+        && data.keys().hasOnly(['sessionId', 'passwordHash', 'createdAt'])
+        && data.sessionId == sessionId
+        && isValidId(data.sessionId)
+        && data.sessionId.size() >= 8
+        && isValidSha256(data.passwordHash)
+        && data.createdAt == request.time;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Surveys configuration
+    match /surveys/{surveyId} {
+      allow get: if isValidId(surveyId) && isValidSurveyId(surveyId);
+      allow list: if true;
+
+      // Initial bootstrap create only if document does not exist yet
+      allow create: if isValidId(surveyId)
+        && isValidSurveyId(surveyId)
+        && isValidSurveyConfig(incoming(), surveyId)
+        && !exists(/databases/$(database)/documents/surveys/$(surveyId));
+
+      // Action-based update strictly gated by verified adminSessionId
+      allow update: if isValidId(surveyId)
+        && isValidSurveyId(surveyId)
+        && isValidSurveyConfig(incoming(), surveyId)
+        && 'adminSessionId' in incoming()
+        && hasValidAdminSession(incoming().adminSessionId)
+        && incoming().surveyId == existing().surveyId
+        && (
+          // Action: Toggle poll open/visibility settings
+          incoming().diff(existing()).affectedKeys().hasOnly(['isOpen', 'showLiveResults', 'showCorrectAnswer', 'updatedAt', 'adminSessionId'])
+          // Action: Reset responses by advancing activeRound
+          || (
+            incoming().diff(existing()).affectedKeys().hasOnly(['activeRound', 'updatedAt', 'adminSessionId'])
+            && incoming().activeRound == existing().activeRound + 1
+          )
+        );
+
+      allow delete: if false;
+
+      // 2. Participant responses subcollection (Master Gate checks parent survey state)
+      match /responses/{responseId} {
+        allow get: if isValidId(surveyId) && isValidId(responseId);
+        allow list: if isValidId(surveyId);
+
+        allow create: if isValidId(surveyId)
+          && isValidId(responseId)
+          && isValidSurveyId(surveyId)
+          && isValidSurveyResponse(incoming(), surveyId)
+          && exists(/databases/$(database)/documents/surveys/$(surveyId))
+          && get(/databases/$(database)/documents/surveys/$(surveyId)).data.isOpen == true
+          && incoming().round == get(/databases/$(database)/documents/surveys/$(surveyId)).data.activeRound;
+
+        allow update: if false;
+
+        // Only stale responses from previous rounds can be purged after an admin reset
+        allow delete: if isValidId(surveyId)
+          && isValidId(responseId)
+          && isValidSurveyId(surveyId)
+          && exists(/databases/$(database)/documents/surveys/$(surveyId))
+          && existing().round < get(/databases/$(database)/documents/surveys/$(surveyId)).data.activeRound;
+      }
+    }
+
+    // 3. Global council settings (voting policy)
+    match /council_settings/{settingId} {
+      allow get: if settingId == 'main';
+      allow list: if false;
+
+      allow create: if settingId == 'main'
+        && isValidCouncilSettings(incoming())
+        && !exists(/databases/$(database)/documents/council_settings/main);
+
+      allow update: if settingId == 'main'
+        && isValidCouncilSettings(incoming())
+        && 'adminSessionId' in incoming()
+        && hasValidAdminSession(incoming().adminSessionId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['videoUrl', 'videoType', 'videoTitle', 'preventDuplicateVotes', 'updatedAt', 'adminSessionId']);
+
+      allow delete: if false;
+    }
+
+    // 4. Unreadable Admin Config (password hash)
+    match /admin_config/{configId} {
+      allow read: if false;
+
+      allow create: if configId == 'auth'
+        && isValidAdminConfig(incoming())
+        && !exists(/databases/$(database)/documents/admin_config/auth);
+
+      allow update: if configId == 'auth'
+        && isValidAdminConfig(incoming())
+        && 'adminSessionId' in incoming()
+        && hasValidAdminSession(incoming().adminSessionId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['passwordHash', 'updatedAt', 'adminSessionId']);
+
+      allow delete: if false;
+    }
+
+    // 5. Unreadable Admin Sessions (verified via passwordHash match against admin_config/auth)
+    match /admin_sessions/{sessionId} {
+      allow read: if false;
+
+      allow create: if isValidId(sessionId)
+        && isValidAdminSession(incoming(), sessionId)
+        && exists(/databases/$(database)/documents/admin_config/auth)
+        && incoming().passwordHash == get(/databases/$(database)/documents/admin_config/auth).data.passwordHash;
+
+      allow update, delete: if false;
+    }
+  }
+}

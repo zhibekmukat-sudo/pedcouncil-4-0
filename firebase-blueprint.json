@@ -1,0 +1,199 @@
+{
+  "entities": {
+    "SurveyConfig": {
+      "title": "SurveyConfig",
+      "description": "Configuration and live visibility state for an individual survey or pedagogical case.",
+      "type": "object",
+      "properties": {
+        "surveyId": {
+          "type": "string",
+          "enum": ["survey_1", "case_1", "case_2", "case_3"],
+          "description": "Unique identifier of the survey or pedagogical case."
+        },
+        "isOpen": {
+          "type": "boolean",
+          "description": "Whether participants are currently allowed to submit responses."
+        },
+        "showLiveResults": {
+          "type": "boolean",
+          "description": "Whether live results are visible on the projector screen before closing."
+        },
+        "showCorrectAnswer": {
+          "type": "boolean",
+          "description": "Whether the correct answer or sequence is revealed."
+        },
+        "activeRound": {
+          "type": "integer",
+          "description": "Active voting round counter incremented upon admin reset."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last configuration update."
+        },
+        "adminSessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Verified admin session ID authorizing configuration updates."
+        }
+      },
+      "required": ["surveyId", "isOpen", "showLiveResults", "showCorrectAnswer", "activeRound", "updatedAt"]
+    },
+    "SurveyResponse": {
+      "title": "SurveyResponse",
+      "description": "An individual participant response to a survey or pedagogical case.",
+      "type": "object",
+      "properties": {
+        "surveyId": {
+          "type": "string",
+          "enum": ["survey_1", "case_1", "case_2", "case_3"],
+          "description": "Identifier of the survey or case."
+        },
+        "round": {
+          "type": "integer",
+          "description": "Voting round number matching the survey activeRound."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique anonymous participant session identifier."
+        },
+        "selectedOptions": {
+          "type": "array",
+          "description": "Single selected option ID for the survey or pedagogical case."
+        },
+        "sequence": {
+          "type": "array",
+          "description": "Reserved empty array for backward schema compatibility."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["kk", "ru"],
+          "description": "Interface language active when the response was submitted."
+        },
+        "submittedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the response was recorded."
+        }
+      },
+      "required": ["surveyId", "round", "sessionId", "selectedOptions", "sequence", "language", "submittedAt"]
+    },
+    "CouncilSettings": {
+      "title": "CouncilSettings",
+      "description": "Global council settings including freshman feedback video configuration and voting rules.",
+      "type": "object",
+      "properties": {
+        "videoUrl": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "URL of the pre-recorded freshman feedback video."
+        },
+        "videoType": {
+          "type": "string",
+          "enum": ["none", "youtube", "vimeo", "direct"],
+          "description": "Format of the linked video."
+        },
+        "videoTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional display title for the video."
+        },
+        "preventDuplicateVotes": {
+          "type": "boolean",
+          "description": "Whether one vote per session per survey round is enforced."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last update."
+        },
+        "adminSessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Verified admin session ID authorizing settings update."
+        }
+      },
+      "required": ["videoUrl", "videoType", "videoTitle", "preventDuplicateVotes", "updatedAt"]
+    },
+    "AdminConfig": {
+      "title": "AdminConfig",
+      "description": "Hashed administrator access credential configuration.",
+      "type": "object",
+      "properties": {
+        "passwordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hex digest of the administrator password."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of credential update."
+        },
+        "adminSessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Verified admin session ID authorizing password update."
+        }
+      },
+      "required": ["passwordHash", "updatedAt"]
+    },
+    "AdminSession": {
+      "title": "AdminSession",
+      "description": "Verified administrator session token created after password hash verification.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Cryptographic session token identifier."
+        },
+        "passwordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Submitted SHA-256 password digest verified against AdminConfig."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the session was established."
+        }
+      },
+      "required": ["sessionId", "passwordHash", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/surveys/{surveyId}": {
+      "schema": { "$ref": "#/entities/SurveyConfig" },
+      "description": "Configuration and status documents for each of the 4 council polls and cases."
+    },
+    "/surveys/{surveyId}/responses/{responseId}": {
+      "schema": { "$ref": "#/entities/SurveyResponse" },
+      "description": "Subcollection storing immutable participant submissions per survey/case."
+    },
+    "/council_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/CouncilSettings" },
+      "description": "Global council configuration document ('main')."
+    },
+    "/admin_config/{configId}": {
+      "schema": { "$ref": "#/entities/AdminConfig" },
+      "description": "Server-side unreadable administrator password hash document ('auth')."
+    },
+    "/admin_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AdminSession" },
+      "description": "Write-only verified administrator session tokens."
+    }
+  }
+}
